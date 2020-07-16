@@ -29,13 +29,19 @@ import com.cloudbees.jenkins.plugins.bitbucket.api.BitbucketApiFactory;
 import com.cloudbees.jenkins.plugins.bitbucket.api.BitbucketAuthenticator;
 import com.cloudbees.jenkins.plugins.bitbucket.avatars.AvatarCache;
 import com.cloudbees.jenkins.plugins.bitbucket.avatars.AvatarCacheSource;
+import com.cloudbees.plugins.credentials.CredentialsMatcher;
+import com.cloudbees.plugins.credentials.CredentialsMatchers;
+import com.cloudbees.plugins.credentials.CredentialsProvider;
 import com.cloudbees.plugins.credentials.common.StandardCredentials;
+import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
+import hudson.security.ACL;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import jenkins.authentication.tokens.api.AuthenticationTokens;
+import jenkins.model.Jenkins;
 import jenkins.scm.api.metadata.AvatarMetadataAction;
 
 /**
@@ -74,7 +80,7 @@ public class BitbucketTeamMetadataAction extends AvatarMetadataAction {
         @Override
         public AvatarImage fetch() {
             BitbucketAuthenticator authenticator = AuthenticationTokens
-                    .convert(BitbucketAuthenticator.authenticationContext(serverUrl), credentials);
+                    .convert(BitbucketAuthenticator.authenticationContext(serverUrl), getStoredCredentials());
             BitbucketApi bitbucket = BitbucketApiFactory.newInstance(serverUrl, authenticator, repoOwner, null);
             try {
                 return bitbucket.getTeamAvatar();
@@ -82,6 +88,38 @@ public class BitbucketTeamMetadataAction extends AvatarMetadataAction {
                 LOGGER.log(Level.INFO, "IOException: " + e.getMessage(), e);
             } catch (InterruptedException e) {
                 LOGGER.log(Level.INFO, "InterruptedException: " + e.getMessage(), e);
+            }
+            return null;
+        }
+
+        public StandardCredentials getStoredCredentials() {
+            // this.credentials values have been serialized and saved which may be inconsistent
+            // with the credentials in the store. Use the latest values from the credentials store
+            if (credentials != null) {
+                CredentialsMatcher matcher;
+
+                if (credentials.getScope() != null) {
+                    matcher = CredentialsMatchers.allOf(
+                            CredentialsMatchers.withId(credentials.getId()),
+                            CredentialsMatchers.withScope(credentials.getScope()),
+                            AuthenticationTokens.matcher(BitbucketAuthenticator.authenticationContext(serverUrl)));
+                } else {
+                    matcher = CredentialsMatchers.allOf(
+                            CredentialsMatchers.withId(credentials.getId()),
+                            AuthenticationTokens.matcher(BitbucketAuthenticator.authenticationContext(serverUrl)));
+                }
+
+                String scopeDisplayName = (credentials.getScope() == null) ? "none" : credentials.getScope().getDisplayName();
+                LOGGER.log(Level.FINE, "Retrieving the credential values with id: {} & scope: {} from credential store",
+                        new Object[]{credentials.getId(), scopeDisplayName});
+
+                return CredentialsMatchers.firstOrNull(
+                       CredentialsProvider.lookupCredentials(
+                                StandardCredentials.class,
+                                Jenkins.get(),
+                                ACL.SYSTEM,
+                                URIRequirementBuilder.fromUri(serverUrl).build()),
+                        matcher);
             }
             return null;
         }
